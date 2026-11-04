@@ -2,6 +2,7 @@
 
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -110,10 +111,41 @@ class GitCollectionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("[ERROR]", result.stderr)
 
+    def test_generation_requires_diff(self):
+        # 새 파일 목록만 있을 때는 AI를 호출하지 않고 준비 방법을 안내합니다.
+        (self.root / "new.txt").write_text("hello\n", encoding="utf-8")
+        for command in ("commit", "pr"):
+            with self.subTest(command=command):
+                result = self.cli(None, command)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("요약할 diff가 없습니다", result.stderr)
+                self.assertNotIn("AI API 호출 횟수", result.stdout)
+
+    def test_generation_requires_key(self):
+        (self.root / "new.txt").write_text("hello\n", encoding="utf-8")
+        self.git("add", "new.txt")
+        # 실제 환경에 키가 있더라도 이 테스트에서는 빈 값으로 덮어씁니다.
+        with patch.dict(os.environ, {"AI_API_KEY": ""}):
+            for command in ("commit", "pr"):
+                with self.subTest(command=command):
+                    result = self.cli(None, command, "--safe-mode")
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("AI_API_KEY 환경변수가 설정되지 않았습니다", result.stderr)
+                    self.assertNotIn("AI API 호출 횟수", result.stdout)
+
+    def test_invalid_options_rejected(self):
+        for option, value in (("--temperature", "nan"), ("--temperature", "-1"),
+                              ("--temperature", "3"), ("--max-tokens", "0")):
+            with self.subTest(option=option, value=value):
+                result = self.cli(None, "commit", option, value)
+                self.assertEqual(result.returncode, 2)
+                self.assertNotIn("AI API 호출 횟수", result.stdout)
+
 
 class ApiTests(unittest.TestCase):
     def setUp(self):
-        self.args = SimpleNamespace(model="test-model", temperature=0.3, max_tokens=123)
+        self.args = SimpleNamespace(model="test-model", temperature=0.3, max_tokens=123,
+                                    base_url="https://copa.codyssey.kr/v1/")
         # 본인 키 대신 가짜 환경변수와 모의 HTTP 응답으로 무료 테스트합니다.
         env = patch.dict("os.environ", {"AI_API_KEY": "test-only"})
         env.start()
@@ -129,6 +161,7 @@ class ApiTests(unittest.TestCase):
         }
         self.assertEqual(generate_text("M a", "+hello", self.args), "변경 요약")
         self.post.assert_called_once()
+        self.assertEqual(self.post.call_args.args[0], "https://copa.codyssey.kr/v1/chat/completions")
         body = self.post.call_args.kwargs["json"]
         self.assertEqual(body["model"], "test-model")
         self.assertEqual(body["temperature"], 0.3)
@@ -139,6 +172,22 @@ class ApiTests(unittest.TestCase):
         with patch.dict("os.environ", {"AI_API_KEY": ""}):
             with self.assertRaisesRegex(ValueError, "환경변수"):
                 generate_text("M a", "+hello", self.args)
+        self.post.assert_not_called()
+
+    def test_gpt5_mini_omits_temperature(self):
+        self.args.model = "gpt-5-mini"
+        self.args.temperature = 1
+        self.post.return_value = Mock(ok=True)
+        self.post.return_value.json.return_value = {
+            "choices": [{"message": {"content": "요약"}}]
+        }
+        self.assertEqual(generate_text("M a", "+hello", self.args), "요약")
+        self.assertNotIn("temperature", self.post.call_args.kwargs["json"])
+
+    def test_gpt5_mini_rejects_custom_temperature(self):
+        self.args.model = "gpt-5-mini"
+        with self.assertRaisesRegex(ValueError, "temperature 조절"):
+            generate_text("M a", "+hello", self.args)
         self.post.assert_not_called()
 
     def test_http_errors(self):
@@ -186,6 +235,8 @@ class ApiTests(unittest.TestCase):
         self.assertIn("커밋 제목 한 줄", body["messages"][0]["content"])
         self.assertIn("--- Commit Message ---\nfeat: 변경 수집 추가\n", output.getvalue())
         self.assertNotIn("불필요한 본문", output.getvalue())
+        self.assertNotIn("change\n", output.getvalue())
+        self.assertIn("Git diff 200줄 수집 완료", output.getvalue())
 
 
     def test_pr_command_with_safe_mode(self):
@@ -205,6 +256,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(body["messages"][1]["content"].count("change\n"), 200)
         self.assertIn("JSON", body["messages"][0]["content"])
         self.assertIn("--- PR Title ---\nfeat: PR 생성 추가\n", output.getvalue())
+        self.assertNotIn("change\n", output.getvalue())
         for header in ("Why", "What", "How to Test"):
             self.assertIn(f"## {header}\n- ", output.getvalue())
 
