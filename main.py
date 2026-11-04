@@ -1,6 +1,7 @@
 """Git 변경 사항을 읽는 터미널 프로그램."""
 
 import argparse
+import json
 import math
 import os
 import subprocess
@@ -92,9 +93,39 @@ def format_commit(text):
     return title
 
 
+def format_pr(text):
+    # JSON으로 받은 항목을 정해진 PR 양식으로 바꿉니다. 추가 API 요청은 없습니다.
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        raise ValueError("PR 응답이 올바른 JSON 형식이 아닙니다.") from None
+    if not isinstance(data, dict) or not isinstance(data.get("title"), str):
+        raise ValueError("PR 제목이 없거나 형식이 올바르지 않습니다.")
+    title = " ".join(data["title"].split())
+    if not title:
+        raise ValueError("PR 제목이 비어 있습니다.")
+    if len(title) > 80:
+        print("[INFO] PR 제목을 최대 80자로 줄였습니다. 의미를 검토해 주세요.")
+        title = title[:80].rstrip()
+    sections = []
+    for key, header in (("why", "Why"), ("what", "What"), ("how_to_test", "How to Test")):
+        items = data.get(key, [])
+        if not isinstance(items, list) or any(not isinstance(item, str) for item in items):
+            raise ValueError(f"PR {header} 항목은 문자열 목록이어야 합니다.")
+        # 줄바꿈을 정리해 각 항목이 한 개의 불릿으로 표시되도록 합니다.
+        bullets = [" ".join(item.split()).lstrip("-* ") for item in items]
+        bullets = [item for item in bullets if item]
+        if not bullets:
+            # 부족한 내용은 지어내지 않고 사용자에게 보완을 요청합니다.
+            bullets = ["정보 부족: 검토 후 직접 작성해 주세요."]
+            print(f"[INFO] PR {header} 내용이 없어 확인용 문구를 넣었습니다.")
+        sections.append(f"## {header}\n" + "\n".join(f"- {item}" for item in bullets))
+    return title, "\n\n".join(sections)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Git 변경 사항을 확인합니다.")
-    parser.add_argument("command", nargs="?", choices=["commit"], help="커밋 제목을 생성합니다.")
+    parser.add_argument("command", nargs="?", choices=["commit", "pr"], help="커밋 제목 또는 PR 초안을 생성합니다.")
     parser.add_argument("--generate", action="store_true", help="AI로 변경 요약을 생성합니다.")
     parser.add_argument("--model", "-model", default="gpt-4.1-mini", help="API 모델")
     parser.add_argument("--temperature", "-temperature", type=float, default=0.2)
@@ -137,6 +168,22 @@ def main():
                 title = format_commit(generate_text(status, diff, args, instruction))
                 print("--- Commit Message ---")
                 print(title)
+                print("----------------------")
+                print("[INFO] 생성된 초안은 검토 후 복사하여 사용해 주세요.")
+            elif args.command == "pr":
+                instruction = (
+                    'Git 변경 사항으로 한국어 PR 초안을 작성하고 JSON 객체만 출력하세요. '
+                    '형식: {"title": "제목", "why": ["변경 배경"], '
+                    '"what": ["핵심 변경 사항"], "how_to_test": ["테스트 방법"]}. '
+                    '제목은 한 줄, 최대 80자입니다. 각 목록은 하나 이상의 항목을 포함하세요. '
+                    '코드 블록은 사용하지 마세요. 배경이 불분명하면 확인이 필요하다고 쓰세요. '
+                    '테스트는 제안할 수 있지만 실행했다고 주장하지 마세요.'
+                )
+                title, body = format_pr(generate_text(status, diff, args, instruction))
+                print("--- PR Title ---")
+                print(title)
+                print("--- PR Body ---")
+                print(body)
                 print("----------------------")
                 print("[INFO] 생성된 초안은 검토 후 복사하여 사용해 주세요.")
             else:

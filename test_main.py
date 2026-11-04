@@ -1,6 +1,7 @@
 """실제 임시 Git 저장소에서 변경 수집 동작을 확인합니다."""
 
 import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -11,7 +12,7 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from main import format_commit, generate_text, main
+from main import format_commit, format_pr, generate_text, main
 
 
 SCRIPT = Path(__file__).with_name("main.py")
@@ -98,6 +99,11 @@ class GitCollectionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("변경 사항이 없습니다", result.stdout)
 
+    def test_pr_clean_repository(self):
+        result = self.cli(None, "pr")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("변경 사항이 없습니다", result.stdout)
+
     def test_non_repository_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
             result = self.cli(folder)
@@ -180,6 +186,56 @@ class ApiTests(unittest.TestCase):
         self.assertIn("커밋 제목 한 줄", body["messages"][0]["content"])
         self.assertIn("--- Commit Message ---\nfeat: 변경 수집 추가\n", output.getvalue())
         self.assertNotIn("불필요한 본문", output.getvalue())
+
+
+    def test_pr_command_with_safe_mode(self):
+        draft = {"title": "feat: PR 생성 추가", "why": ["설명 작성 지원"],
+                 "what": ["PR 명령 추가"], "how_to_test": ["PR 명령 실행 후 확인"]}
+        self.post.return_value = Mock(ok=True)
+        self.post.return_value.json.return_value = {
+            "choices": [{"message": {"content": json.dumps(draft)}}]
+        }
+        # 실제 CLI 흐름에서 API 한 번 호출과 최종 PR 양식을 함께 확인합니다.
+        with patch("sys.argv", ["main.py", "pr", "--safe-mode"]), \
+                patch("main.collect_changes", return_value=(" M a\n", "change\n" * 250)), \
+                patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(main(), 0)
+        self.post.assert_called_once()
+        body = self.post.call_args.kwargs["json"]
+        self.assertEqual(body["messages"][1]["content"].count("change\n"), 200)
+        self.assertIn("JSON", body["messages"][0]["content"])
+        self.assertIn("--- PR Title ---\nfeat: PR 생성 추가\n", output.getvalue())
+        for header in ("Why", "What", "How to Test"):
+            self.assertIn(f"## {header}\n- ", output.getvalue())
+
+
+class PrFormatTests(unittest.TestCase):
+    def test_title_and_sections(self):
+        draft = {"title": "PR\n제목", "why": ["배경\n설명"],
+                 "what": ["- 기능 추가"], "how_to_test": ["테스트 제안"]}
+        title, body = format_pr(json.dumps(draft))
+        self.assertEqual(title, "PR 제목")
+        self.assertEqual(body, "## Why\n- 배경 설명\n\n## What\n- 기능 추가\n\n## How to Test\n- 테스트 제안")
+
+    def test_title_length_limits(self):
+        for length in (79, 80, 81, 100):
+            with self.subTest(length=length), patch("sys.stdout", new_callable=io.StringIO):
+                title, _ = format_pr(json.dumps({"title": "가" * length}))
+                self.assertEqual(len(title), min(length, 80))
+
+    def test_missing_sections_are_marked_for_review(self):
+        with patch("sys.stdout", new_callable=io.StringIO):
+            _, body = format_pr(json.dumps({"title": "제목", "why": ["  ", "-"]}))
+        for header in ("Why", "What", "How to Test"):
+            self.assertIn(f"## {header}\n- 정보 부족:", body)
+
+    def test_invalid_responses_rejected(self):
+        for text in ("not json", "[]", '{}', '{"title": " "}',
+                     '{"title": "제목", "what": "잘못된 목록"}',
+                     '{"title": "제목", "why": [1]}'):
+            with self.subTest(text=text), patch("sys.stdout", new_callable=io.StringIO), \
+                    self.assertRaises(ValueError):
+                format_pr(text)
 
 
 class CommitFormatTests(unittest.TestCase):
