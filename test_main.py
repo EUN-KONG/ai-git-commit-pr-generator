@@ -23,9 +23,9 @@ class GitCollectionTests(unittest.TestCase):
             ["git", *args], cwd=self.root, check=True, capture_output=True
         )
 
-    def cli(self, folder=None):
+    def cli(self, folder=None, *args):
         return subprocess.run(
-            [sys.executable, str(SCRIPT)], cwd=folder or self.root,
+            [sys.executable, str(SCRIPT), *args], cwd=folder or self.root,
             capture_output=True, text=True,
         )
 
@@ -58,6 +58,33 @@ class GitCollectionTests(unittest.TestCase):
         result = self.cli(folder)
         self.assertEqual(result.returncode, 1)
         self.assertIn("루트", result.stderr)
+
+    def test_safe_mode_limits_large_diff(self):
+        # 제한을 넘는 실제 diff에서 뒷부분이 빠지는지 확인합니다.
+        file = self.root / "large.txt"
+        file.write_text("".join(f"line-{i}\n" for i in range(250)), encoding="utf-8")
+        self.git("add", "large.txt")
+        normal = self.cli()
+        safe = self.cli(None, "--safe-mode")
+        self.assertEqual(safe.returncode, 0)
+        self.assertIn("+line-249", normal.stdout)
+        self.assertNotIn("+line-249", safe.stdout)
+        diff = safe.stdout.split("--- 변경 내용 (Git diff) ---\n", 1)[1]
+        self.assertEqual(len(diff.splitlines()), 200)
+
+    def test_safe_mode_preserves_small_diff(self):
+        (self.root / "small.txt").write_text("hello\n", encoding="utf-8")
+        self.git("add", "small.txt")
+        normal = self.cli()
+        safe = self.cli(None, "-safe-mode")
+        marker = "--- 변경 내용 (Git diff) ---\n"
+        self.assertEqual(safe.returncode, 0)
+        self.assertEqual(normal.stdout.split(marker)[1], safe.stdout.split(marker)[1])
+
+    def test_safe_mode_clean_repository(self):
+        result = self.cli(None, "--safe-mode")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("변경 사항이 없습니다", result.stdout)
 
     def test_non_repository_rejected(self):
         with tempfile.TemporaryDirectory() as folder:

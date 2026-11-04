@@ -1,5 +1,6 @@
 """Git 변경 사항을 읽는 터미널 프로그램."""
 
+import argparse
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +33,12 @@ def collect_changes():
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Git 변경 사항을 확인합니다.")
+    parser.add_argument(
+        "--safe-mode", "-safe-mode", action="store_true",
+        help="diff를 처음 200줄까지만 사용합니다. 민감정보를 자동 제거하지는 않습니다.",
+    )
+    args = parser.parse_args()
     try:
         status, diff = collect_changes()
         if not status:
@@ -39,6 +46,11 @@ def main():
             return 0
         print("--- 변경된 파일 (Git status) ---")
         print(status, end="")
+        if args.safe_mode:
+            # 이후 AI에 보낼 내용도 이 diff를 사용하도록 출력 전에 제한합니다.
+            lines = diff.splitlines(keepends=True)
+            diff = "".join(lines[:200])
+            print(f"[INFO] 안전 모드: diff {len(lines)}줄 중 {min(len(lines), 200)}줄 사용 (최대 200줄)")
         print("--- 변경 내용 (Git diff) ---")
         print(diff or "[INFO] 추적 중인 파일의 변경 내용이 없습니다.", end="" if diff else "\n")
         if any(line.startswith("??") for line in status.splitlines()):
