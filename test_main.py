@@ -5,6 +5,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+
+import requests
+
+from main import generate_text
 
 
 SCRIPT = Path(__file__).with_name("main.py")
@@ -91,6 +97,66 @@ class GitCollectionTests(unittest.TestCase):
             result = self.cli(folder)
         self.assertEqual(result.returncode, 1)
         self.assertIn("[ERROR]", result.stderr)
+
+
+class ApiTests(unittest.TestCase):
+    def setUp(self):
+        self.args = SimpleNamespace(model="test-model", temperature=0.3, max_tokens=123)
+        # 본인 키 대신 가짜 환경변수와 모의 HTTP 응답으로 무료 테스트합니다.
+        env = patch.dict("os.environ", {"AI_API_KEY": "test-only"})
+        env.start()
+        self.addCleanup(env.stop)
+        post = patch("main.requests.post")
+        self.post = post.start()
+        self.addCleanup(post.stop)
+
+    def test_success_and_request_options(self):
+        self.post.return_value = Mock(ok=True)
+        self.post.return_value.json.return_value = {
+            "choices": [{"message": {"content": " 변경 요약 "}, "finish_reason": "stop"}]
+        }
+        self.assertEqual(generate_text("M a", "+hello", self.args), "변경 요약")
+        self.post.assert_called_once()
+        body = self.post.call_args.kwargs["json"]
+        self.assertEqual(body["model"], "test-model")
+        self.assertEqual(body["temperature"], 0.3)
+        self.assertEqual(body["max_completion_tokens"], 123)
+        self.assertIn("+hello", body["messages"][1]["content"])
+
+    def test_missing_key(self):
+        with patch.dict("os.environ", {"AI_API_KEY": ""}):
+            with self.assertRaisesRegex(ValueError, "환경변수"):
+                generate_text("M a", "+hello", self.args)
+        self.post.assert_not_called()
+
+    def test_http_errors(self):
+        for code in (400, 401, 429, 500):
+            with self.subTest(code=code):
+                self.post.return_value = Mock(ok=False, status_code=code)
+                with self.assertRaisesRegex(ValueError, f"HTTP {code}"):
+                    generate_text("M a", "+hello", self.args)
+
+    def test_network_errors(self):
+        for error, message in ((requests.Timeout(), "시간 초과"),
+                               (requests.ConnectionError(), "네트워크")):
+            with self.subTest(message=message):
+                self.post.side_effect = error
+                with self.assertRaisesRegex(ValueError, message):
+                    generate_text("M a", "+hello", self.args)
+
+    def test_invalid_and_empty_responses(self):
+        self.post.return_value = Mock(ok=True)
+        for data in ({}, {"choices": []}, {"choices": [{"message": {"content": ""}}]}):
+            with self.subTest(data=data):
+                self.post.return_value.json.return_value = data
+                with self.assertRaises(ValueError):
+                    generate_text("M a", "+hello", self.args)
+
+    def test_truncated_response(self):
+        self.post.return_value = Mock(ok=True)
+        self.post.return_value.json.return_value = {"choices": [{"finish_reason": "length"}]}
+        with self.assertRaisesRegex(ValueError, "토큰 한도"):
+            generate_text("M a", "+hello", self.args)
 
 
 if __name__ == "__main__":
