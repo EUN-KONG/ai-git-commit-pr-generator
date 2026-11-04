@@ -1,5 +1,6 @@
 """실제 임시 Git 저장소에서 변경 수집 동작을 확인합니다."""
 
+import io
 import subprocess
 import sys
 import tempfile
@@ -10,7 +11,7 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from main import generate_text
+from main import format_commit, generate_text, main
 
 
 SCRIPT = Path(__file__).with_name("main.py")
@@ -92,6 +93,11 @@ class GitCollectionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("변경 사항이 없습니다", result.stdout)
 
+    def test_commit_clean_repository(self):
+        result = self.cli(None, "commit")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("변경 사항이 없습니다", result.stdout)
+
     def test_non_repository_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
             result = self.cli(folder)
@@ -157,6 +163,38 @@ class ApiTests(unittest.TestCase):
         self.post.return_value.json.return_value = {"choices": [{"finish_reason": "length"}]}
         with self.assertRaisesRegex(ValueError, "토큰 한도"):
             generate_text("M a", "+hello", self.args)
+
+    def test_commit_command_with_safe_mode(self):
+        self.post.return_value = Mock(ok=True)
+        self.post.return_value.json.return_value = {
+            "choices": [{"message": {"content": "feat: 변경 수집 추가\n\n불필요한 본문"}}]
+        }
+        # CLI 입구부터 출력까지 실행하며, 전송한 diff 제한도 확인합니다.
+        with patch("sys.argv", ["main.py", "commit", "--safe-mode"]), \
+                patch("main.collect_changes", return_value=(" M a\n", "change\n" * 250)), \
+                patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(main(), 0)
+        self.post.assert_called_once()
+        body = self.post.call_args.kwargs["json"]
+        self.assertEqual(body["messages"][1]["content"].count("change\n"), 200)
+        self.assertIn("커밋 제목 한 줄", body["messages"][0]["content"])
+        self.assertIn("--- Commit Message ---\nfeat: 변경 수집 추가\n", output.getvalue())
+        self.assertNotIn("불필요한 본문", output.getvalue())
+
+
+class CommitFormatTests(unittest.TestCase):
+    def test_title_only(self):
+        self.assertEqual(format_commit('\n```text\n"feat: 기능 추가"\n본문\n```'), "feat: 기능 추가")
+
+    def test_length_limits(self):
+        for length in (50, 51, 72, 73, 100):
+            with self.subTest(length=length), patch("sys.stdout", new_callable=io.StringIO):
+                self.assertEqual(len(format_commit("가" * length)), min(length, 72))
+
+    def test_empty_title_rejected(self):
+        for text in ("", " \n", "```\n```", '""'):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                format_commit(text)
 
 
 if __name__ == "__main__":
