@@ -1,10 +1,10 @@
 # ai-git-commit-pr-generator
 
-Git 변경 내용을 OpenAI API에 전달하여 커밋 제목 또는 Pull Request(PR) 초안을 터미널에 출력하는 Python CLI 도구입니다. 생성된 문구는 사용자가 검토하고 복사해 사용합니다. 프로그램이 직접 커밋하거나 push하거나 GitHub에 PR을 게시하지 않습니다.
+Git 변경 내용을 OpenAI 호환 API에 전달하여 커밋 제목 또는 Pull Request(PR) 초안을 터미널에 출력하는 Python CLI 도구입니다. 생성된 문구는 사용자가 검토하고 복사해 사용합니다. 프로그램이 직접 커밋하거나 push하거나 GitHub에 PR을 게시하지 않습니다.
 
 ## 1. 설치
 
-Python **3.10 이상**, Git, 실제 AI 생성 시 인터넷 연결과 OpenAI API Key가 필요합니다. 아래 명령은 macOS/Linux의 zsh 또는 bash 기준입니다.
+Python **3.10 이상**, Git, 실제 AI 생성 시 인터넷 연결과 새로 발급받은 OpenAI 호환 API Key가 필요합니다. 아래 명령은 macOS/Linux의 zsh 또는 bash 기준입니다.
 
 ```bash
 git clone https://github.com/EUN-KONG/ai-git-commit-pr-generator.git
@@ -19,7 +19,7 @@ python -m pip install -r requirements.txt
 
 ## 2. API Key 환경변수 설정
 
-[OpenAI API Keys](https://platform.openai.com/api-keys)에서 발급받은 키를 **현재 터미널의 환경변수**로 설정합니다. 과제에서 제공한 OpenAI 키가 있다면 사용할 수 있습니다. 실제 요청에는 계정의 API 사용 권한과 사용 가능한 잔액 또는 한도가 필요합니다.
+API 서비스에서 호환 방식을 **OpenAI**로 선택해 발급받은 키를 **현재 터미널의 환경변수**로 설정합니다. 기본 API 주소는 `https://copa.codyssey.kr/v1`, 모델은 `gpt-5-mini`입니다. 실제 요청에는 API 서비스 계정의 사용 권한과 사용 가능한 크레딧이 필요합니다. OpenAI 공식 사이트의 잔액과는 별도입니다.
 
 아래 방식은 키를 화면이나 명령 기록에 직접 남기지 않고 입력합니다. `API Key 입력:`이 표시되면 키를 붙여넣고 Enter를 누릅니다. 입력 내용이 보이지 않는 것은 정상입니다.
 
@@ -65,22 +65,23 @@ python main.py --help
 ### 호출 옵션
 
 ```bash
-python main.py commit --safe-mode --model gpt-4.1-mini --temperature 0.2 --max-tokens 1000
-python main.py pr --safe-mode --max-tokens 1500
+python main.py commit --safe-mode --model gpt-5-mini --max-tokens 4000
+python main.py pr --safe-mode --max-tokens 4000
 ```
 
 | 옵션 | 기본값 | 의미 |
 | --- | --- | --- |
-| `--model` | `gpt-4.1-mini` | 사용할 OpenAI 모델 |
-| `--temperature` | `0.2` | 0~2 사이 값. 낮을수록 표현의 변화를 줄이는 데 도움 |
-| `--max-tokens` | `1000` | 생성할 출력 토큰의 상한. 글자 수와는 다름 |
+| `--base-url` | `https://copa.codyssey.kr/v1` | OpenAI 호환 API 주소 |
+| `--model` | `gpt-5-mini` | API 서비스에서 지원하는 모델 ID |
+| `--temperature` | `1` | 지원 모델에서 표현의 변화 조절. gpt-5-mini에서는 1만 허용하고 전송 생략 |
+| `--max-tokens` | `4000` | 출력·추론 토큰의 상한. 글자 수와는 다름 |
 | `--safe-mode` | 꺼짐 | diff를 처음 200줄까지만 사용 |
 
-`-model`, `-temperature`, `-max-tokens`, `-safe-mode`도 지원합니다. 모델마다 지원 옵션과 접근 권한이 다를 수 있으므로 오류가 나면 모델과 옵션을 확인하세요. 출력 토큰이 부족하면 결과를 사용하지 않고 오류를 표시합니다. 필요할 때만 상한을 높이세요.
+`-model`, `-temperature`, `-max-tokens`, `-safe-mode`도 지원합니다. 기본 `gpt-5-mini`는 temperature 조절을 지원하지 않습니다. 조절이 필요하면 지원 모델로 `--model`을 바꾸고 `--temperature`를 지정하세요. 모델마다 지원 옵션과 접근 권한이 다를 수 있으므로 오류가 나면 모델과 옵션을 확인하세요. 출력 토큰이 부족하면 결과를 사용하지 않고 오류를 표시합니다. 필요할 때만 상한을 높이세요.
 
 ## 4. 출력 예시
 
-다음은 출력 형태를 설명하는 예시이며, 실제 AI 호출 결과를 기록한 것은 아닙니다. 입력 diff에 따라 문구는 달라집니다. 변경 파일·diff·호출 횟수 안내 다음에 결과가 표시됩니다.
+다음은 출력 형태를 설명하는 예시이며, 실제 AI 호출 결과를 기록한 것은 아닙니다. 입력 diff에 따라 문구는 달라집니다. 생성 명령에서는 변경 파일·diff 줄 수·호출 횟수 안내 다음에 결과가 표시됩니다. 긴 diff 원문은 `python main.py`로 따로 확인합니다.
 
 커밋 메시지:
 
@@ -115,7 +116,7 @@ PR 제목은 한 줄, 최대 80자로 제한합니다. 본문은 `Why`, `What`, 
 
 ## 5. 보안·비용·오류 안내
 
-- 파일 목록과 diff가 외부 OpenAI API로 전송됩니다. 전송 전 `python main.py`로 내용을 확인하고 비밀번호, 키, 개인정보를 제거하세요.
+- 파일 목록과 diff가 지정한 외부 API로 전송됩니다. 기본 전송 대상은 `copa.codyssey.kr`입니다. 전송 전 `python main.py`로 내용을 확인하고 비밀번호, 키, 개인정보를 제거하세요.
 - `--safe-mode`는 **줄 수만 제한**합니다. 민감정보를 자동으로 가리지 않으며, 처음 200줄에 포함된 정보도 전송됩니다. 일부 변경이 빠져 요약이 불완전해질 수 있습니다.
 - `.env`, `.env.*`, `.venv/`는 Git에서 제외합니다. 이미 Git이 추적하는 파일은 `.gitignore`만으로 제외되지 않습니다.
 - 생성 명령 한 번당 API를 **1회** 호출하고 호출 횟수를 출력합니다. 자동 재시도와 형식 수정을 위한 재호출은 하지 않습니다. 반복 실행하면 비용이 추가될 수 있습니다.
@@ -124,7 +125,7 @@ PR 제목은 한 줄, 최대 80자로 제한합니다. 본문은 `Why`, `What`, 
 
 ## 6. 테스트와 파일 구성
 
-API Key 없이 다음 명령으로 테스트할 수 있습니다. 가짜 API 응답을 사용하므로 실제 API 호출 비용은 발생하지 않습니다. 임시 Git 저장소는 테스트 후 자동으로 삭제됩니다.
+API Key 없이 다음 명령으로 테스트할 수 있습니다. 가짜 API 응답을 사용하므로 실제 API 호출이나 API 서비스 크레딧 차감은 발생하지 않습니다. 임시 Git 저장소는 테스트 후 자동으로 삭제됩니다.
 
 ```bash
 python -m unittest -v
